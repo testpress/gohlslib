@@ -50,6 +50,8 @@ func main() {
 				},
 			},
 		},
+		Directory:    "/Users/karthik/Downloads/hls/",
+		SegmentCount: 999999,
 	}
 	err := mux.Start()
 	if err != nil {
