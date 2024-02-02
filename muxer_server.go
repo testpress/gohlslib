@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"fmt"
 
 	"github.com/bluenviron/mediacommon/pkg/codecs/av1"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h264"
@@ -759,12 +760,40 @@ func (s *muxerServer) publishPartInner(part *muxerPart) error {
 
 func (s *muxerServer) publishPart(part *muxerPart) error {
 	s.mutex.Lock()
-	err := s.publishPartInner(part)
+	fileName := "video_" + s.prefix + ".m3u8"
+	file, err := s.storageFactory.NewFile(fileName)
+	if err != nil {
+		fmt.Println("failed to create file(%s): %s", fileName, err)
+		return err
+	}
+	
+	err = s.publishPartInner(part)
 	s.mutex.Unlock()
 	if err != nil {
 		return err
 	}
+	
 
+	byts, err := func() ([]byte, error) {
+		s.mutex.Lock()
+		defer s.mutex.Unlock()
+
+		return generateMediaPlaylist(
+			false,
+			s.variant,
+			s.segments,
+			s.nextSegmentParts,
+			s.nextPartID,
+			s.segmentDeleteCount,
+			s.prefix,
+		)
+	}()
+	
+	newPart := file.NewPart()
+	w := newPart.Writer()
+	fmt.Println("Saving : ", part.name)
+
+	_, err = w.Write(byts)
 	s.cond.Broadcast()
 	return nil
 }

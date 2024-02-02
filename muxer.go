@@ -80,6 +80,7 @@ type Muxer struct {
 	SegmentDuration time.Duration
 	// Deprecated: replaced with PartMinDUratino
 	PartDuration time.Duration
+	Prefix string
 
 	//
 	// private
@@ -145,7 +146,7 @@ func (m *Muxer) Start() error {
 	}
 
 	var err error
-	m.prefix, err = generatePrefix()
+	m.prefix = m.Prefix
 	if err != nil {
 		return err
 	}
@@ -369,4 +370,22 @@ func (m *Muxer) WriteMPEG4Audio(ntp time.Time, pts time.Duration, aus [][]byte) 
 // Handle handles a HTTP request.
 func (m *Muxer) Handle(w http.ResponseWriter, r *http.Request) {
 	m.server.handle(w, r)
+}
+
+
+func (m *Muxer) GetVariant() string {
+	return string(m.server.multivariantPlaylist)
+}
+
+
+func (m *Muxer) GenerateMainManifest(data string) {
+	file, err := m.storageFactory.NewFile("video.m3u8")
+	if err != nil {
+		fmt.Println("Failed to create file(video.m3u8): %s", err)
+	}
+	
+	dataBytes := []byte(data)
+	newPart := file.NewPart()
+	w := newPart.Writer()
+	_, err = w.Write(dataBytes)
 }
