@@ -3,9 +3,12 @@ package main
 import (
 	_ "embed"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/bluenviron/mediacommon/pkg/codecs/mpeg4audio"
@@ -22,6 +25,13 @@ import (
 //go:embed index.html
 var index []byte
 
+type UDPAddressInfo struct {
+	Address    string
+	Name       string
+	Resolution string
+	Bandwidth  string
+}
+
 // handleIndex wraps an HTTP handler and serves the home page
 func handleIndex(wrapped http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -37,10 +47,13 @@ func handleIndex(wrapped http.HandlerFunc) http.HandlerFunc {
 }
 
 func main() {
+	var wg sync.WaitGroup
 	directory := flag.String("dir", "", "Directory for HLS files")
-	udpAddress := flag.String("udp", "localhost:9000", "UDP address to listen for MPEG-TS packets")
+	udpAddresses := flag.String("udps", "", "List of UDP addresses and names, formatted as 'address|name|resolution|bandwidth,address|name|resolution|bandwidth,...'")
 
 	flag.Parse()
+	header := "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-INDEPENDENT-SEGMENTS\n\n"
+	m3u8String := ""
 
 	// create the HLS muxer
 	mux := &gohlslib.Muxer{
@@ -58,28 +71,53 @@ func main() {
 		},
 		Directory:    *directory,
 		SegmentCount: 999999,
+		Prefix:       "720p",
 	}
 	err := mux.Start()
 	if err != nil {
 		panic(err)
 	}
 
-	// create an HTTP server and link it to the HLS muxer
-	s := &http.Server{
-		Addr:    ":8080",
-		Handler: handleIndex(mux.Handle),
-	}
-	log.Println("HTTP server created on :8080")
-	go s.ListenAndServe()
+	udpInfo := parseUDPAddresses(*udpAddresses)
 
-	// create a socket to receive MPEG-TS packets
-	pc, err := net.ListenPacket("udp", *udpAddress)
+	for _, info := range udpInfo {
+		fmt.Printf("Address: %s, Name: %s, Resolution: %s, Bandwidth: %s\n", info.Address, info.Name, info.Resolution, info.Bandwidth)
+		m3u8String += GenerateM3U8String(info.Bandwidth, info.Resolution)
+
+		pc, err := net.ListenPacket("udp", info.Address)
+		if err != nil {
+			panic(err)
+		}
+		defer pc.Close()
+
+		log.Println("Starting for ", info.Name, info.Address)
+		wg.Add(1)
+
+		go func(pc net.PacketConn, resolution string) {
+			defer wg.Done()
+			setupMPEGTSReader(pc, resolution, *directory)
+		}(pc, info.Name)
+	}
+
+	m3u8String += GenerateM3U8String("1000000", "1280x720")
+	mux.GenerateMainManifest(header + m3u8String)
+	wg.Wait()
+}
+
+func setupMPEGTSReader(pc net.PacketConn, resolution string, directory string) {
+	mux := &gohlslib.Muxer{
+		VideoTrack: &gohlslib.Track{
+			Codec: &codecs.H264{},
+		},
+		Directory:    directory,
+		SegmentCount: 999999,
+		Prefix:       resolution,
+	}
+	err := mux.Start()
+
 	if err != nil {
 		panic(err)
 	}
-	defer pc.Close()
-
-	log.Println("Waiting for a MPEG-TS/H264 stream on UDP port ", *udpAddress)
 
 	// create a MPEG-TS reader
 	r, err := mpegts.NewReader(mpegts.NewBufferedReader(newPacketConnReader(pc)))
@@ -134,4 +172,42 @@ func main() {
 			panic(err)
 		}
 	}
+}
+
+func GenerateM3U8String(bandwidth string, resolution string) string {
+	var sb strings.Builder
+
+	codecs := "avc1.42c01f"
+	frameRate := "24.000"
+
+	resSplit := strings.Split(resolution, "x")
+	if len(resSplit) == 2 {
+		resTag := resSplit[1]
+		sb.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%s,AVERAGE-BANDWIDTH=%s,CODECS=\"%s\",RESOLUTION=%s,FRAME-RATE=%s\n",
+			bandwidth, bandwidth, codecs, resolution, frameRate))
+		sb.WriteString(fmt.Sprintf("video_%sp.m3u8\n\n", resTag))
+	}
+
+	return sb.String()
+}
+
+func parseUDPAddresses(input string) []UDPAddressInfo {
+	var result []UDPAddressInfo
+	if input == "" {
+		return result
+	}
+
+	// Splitting the input string by comma to get each address|name pair
+	pairs := strings.Split(input, ",")
+	for _, pair := range pairs {
+		// Splitting each pair by pipe
+		parts := strings.Split(pair, "|")
+
+		if len(parts) == 4 {
+			result = append(result, UDPAddressInfo{Address: parts[0], Name: parts[1], Resolution: parts[2], Bandwidth: parts[3]})
+		} else {
+			fmt.Printf("Invalid UDP address format: '%s'\n", pair)
+		}
+	}
+	return result
 }
