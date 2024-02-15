@@ -109,6 +109,15 @@ func setupMPEGTSReader(pc net.PacketConn, resolution string, directory string) {
 		VideoTrack: &gohlslib.Track{
 			Codec: &codecs.H264{},
 		},
+		AudioTrack: &gohlslib.Track{
+			Codec: &codecs.MPEG4Audio{
+				Config: mpeg4audio.Config{
+					Type:         2,
+					SampleRate:   44100,
+					ChannelCount: 2,
+				},
+			},
+		},
 		Directory:    directory,
 		SegmentCount: 999999,
 		Prefix:       resolution,
