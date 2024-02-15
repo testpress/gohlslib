@@ -87,12 +87,9 @@ func main() {
 
 	// find the H264 track
 	found := false
-	log.Printf("Tracks : ", r.Tracks())
 	for _, track := range r.Tracks() {
-		log.Printf("detected track with codec %T\n", track.Codec)
 
 		if _, ok := track.Codec.(*mpegts.CodecH264); ok {
-
 			// setup a callback that is called once a H264 access unit is received
 			r.OnDataH26x(track, func(rawPTS int64, _ int64, au [][]byte) error {
 				// decode the time
@@ -102,7 +99,7 @@ func main() {
 				pts := timeDec.Decode(rawPTS)
 
 				// pass the access unit to the HLS muxer
-				// log.Printf("visit http://localhost:8080 - encoding access unit with PTS = %v", pts)
+				log.Printf("visit http://localhost:8080 - encoding access unit with PTS = %v", pts)
 				mux.WriteH26x(time.Now(), pts, au)
 
 				return nil
