@@ -1,6 +1,7 @@
 package gohlslib
 
 import (
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"fmt"
 
 	"github.com/bluenviron/mediacommon/pkg/codecs/av1"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h264"
@@ -295,7 +295,7 @@ func generateMediaPlaylistFMP4(
 		partHoldBack := (partTarget * 25) / 10
 
 		pl.ServerControl = &playlist.MediaServerControl{
-			CanBlockReload: true,
+			CanBlockReload: false,
 			PartHoldBack:   &partHoldBack,
 			CanSkipUntil:   &skipBoundary,
 		}
