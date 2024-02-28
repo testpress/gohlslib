@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bluenviron/mediacommon/pkg/codecs/mpeg4audio"
 	"github.com/bluenviron/mediacommon/pkg/formats/mpegts"
 
 	"github.com/bluenviron/gohlslib"
@@ -39,6 +40,15 @@ func main() {
 	mux := &gohlslib.Muxer{
 		VideoTrack: &gohlslib.Track{
 			Codec: &codecs.H264{},
+		},
+		AudioTrack: &gohlslib.Track{
+			Codec: &codecs.MPEG4Audio{
+				Config: mpeg4audio.Config{
+					Type:         2,
+					SampleRate:   44100,
+					ChannelCount: 2,
+				},
+			},
 		},
 	}
 	err := mux.Start()
@@ -78,6 +88,7 @@ func main() {
 	// find the H264 track
 	found := false
 	for _, track := range r.Tracks() {
+
 		if _, ok := track.Codec.(*mpegts.CodecH264); ok {
 			// setup a callback that is called once a H264 access unit is received
 			r.OnDataH26x(track, func(rawPTS int64, _ int64, au [][]byte) error {
@@ -94,7 +105,17 @@ func main() {
 				return nil
 			})
 			found = true
-			break
+		}
+
+		if _, ok := track.Codec.(*mpegts.CodecMPEG4Audio); ok {
+			r.OnDataMPEG4Audio(track, func(rawPTS int64, aus [][]byte) error {
+				if timeDec == nil {
+					timeDec = mpegts.NewTimeDecoder(rawPTS)
+				}
+				pts := timeDec.Decode(rawPTS)
+				mux.WriteMPEG4Audio(time.Now(), pts, aus)
+				return nil
+			})
 		}
 	}
 
