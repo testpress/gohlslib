@@ -1,7 +1,6 @@
 package gohlslib
 
 import (
-	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -295,7 +294,7 @@ func generateMediaPlaylistFMP4(
 		partHoldBack := (partTarget * 25) / 10
 
 		pl.ServerControl = &playlist.MediaServerControl{
-			CanBlockReload: false,
+			CanBlockReload: true,
 			PartHoldBack:   &partHoldBack,
 			CanSkipUntil:   &skipBoundary,
 		}
@@ -512,12 +511,12 @@ func queryVal(q url.Values, key string) string {
 
 func (s *muxerServer) handle(w http.ResponseWriter, r *http.Request) {
 	name := filepath.Base(r.URL.Path)
-
+	streamURL := "stream_" + s.prefix + ".m3u8"
 	switch {
 	case name == "index.m3u8":
 		s.handleMultivariantPlaylist(w)
 
-	case name == "stream.m3u8":
+	case name == streamURL:
 		q := r.URL.Query()
 		msn := queryVal(q, "_HLS_msn")
 		part := queryVal(q, "_HLS_part")
@@ -760,38 +759,12 @@ func (s *muxerServer) publishPartInner(part *muxerPart) error {
 
 func (s *muxerServer) publishPart(part *muxerPart) error {
 	s.mutex.Lock()
-
 	err := s.publishPartInner(part)
 	s.mutex.Unlock()
 	if err != nil {
 		return err
 	}
 
-	byts, err := func() ([]byte, error) {
-		s.mutex.Lock()
-		defer s.mutex.Unlock()
-
-		return generateMediaPlaylist(
-			false,
-			s.variant,
-			s.segments,
-			s.nextSegmentParts,
-			s.nextPartID,
-			s.segmentDeleteCount,
-			s.prefix,
-		)
-	}()
-
-	fileName := "video_" + s.prefix + ".m3u8"
-	file, err := s.storageFactory.NewFile(fileName)
-	if err != nil {
-		fmt.Println("failed to create file(%s): %s", fileName, err)
-		return err
-	}
-	newPart := file.NewPart()
-	w := newPart.Writer()
-
-	_, err = w.Write(byts)
 	s.cond.Broadcast()
 	return nil
 }
