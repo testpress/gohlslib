@@ -111,23 +111,7 @@ func main() {
 
 		log.Println("Starting for ", info.Name, info.Address)
 		wg.Add(1)
-		mux := &gohlslib.Muxer{
-			VideoTrack: &gohlslib.Track{
-				Codec: &codecs.H264{},
-			},
-			AudioTrack: &gohlslib.Track{
-				Codec: &codecs.MPEG4Audio{
-					Config: mpeg4audio.Config{
-						Type:         2,
-						SampleRate:   44100,
-						ChannelCount: 2,
-					},
-				},
-			},
-			Directory:    *directory,
-			SegmentCount: 999999,
-			Prefix:       info.Name,
-		}
+		mux := createMuxer(*directory, info.Name)
 		muxMap[info.Name] = mux
 		go func(pc net.PacketConn, resolution string, mux *gohlslib.Muxer, index int) {
 			defer wg.Done()
@@ -135,16 +119,30 @@ func main() {
 		}(pc, info.Name, mux, index)
 	}
 
-	s := &http.Server{
-		Addr:    ":8081",
-		Handler: handleM3u8Urls(muxMap),
-	}
-	log.Println("HTTP server created on :8080")
-	go s.ListenAndServe()
-
+	startServer(muxMap)
 	m3u8String = header + m3u8String
 	mux.GenerateMainManifest(m3u8String)
 	wg.Wait()
+}
+
+func createMuxer(directory string, prefix string) *gohlslib.Muxer {
+	return &gohlslib.Muxer{
+		VideoTrack: &gohlslib.Track{
+			Codec: &codecs.H264{},
+		},
+		AudioTrack: &gohlslib.Track{
+			Codec: &codecs.MPEG4Audio{
+				Config: mpeg4audio.Config{
+					Type:         2,
+					SampleRate:   44100,
+					ChannelCount: 2,
+				},
+			},
+		},
+		Directory:    directory,
+		SegmentCount: 999999,
+		Prefix:       prefix,
+	}
 }
 
 func setupMPEGTSReader(pc net.PacketConn, resolution string, directory string, mux *gohlslib.Muxer, index int) {
@@ -210,11 +208,13 @@ func setupMPEGTSReader(pc net.PacketConn, resolution string, directory string, m
 	}
 }
 
-func printMuxMap(muxMap map[string]*gohlslib.Muxer) {
-	fmt.Println("Contents of muxMap:")
-	for resolution, mux := range muxMap {
-		fmt.Printf("Resolution: %s, Mux: %v\n", resolution, mux)
+func startServer(muxerMap map[string]*gohlslib.Muxer) {
+	s := &http.Server{
+		Addr:    ":8081",
+		Handler: handleM3u8Urls(muxerMap),
 	}
+	log.Println("HTTP server created on :8080")
+	go s.ListenAndServe()
 }
 
 func GenerateM3U8String(bandwidth string, resolution string) string {
