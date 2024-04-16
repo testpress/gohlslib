@@ -24,6 +24,7 @@ import (
 
 //go:embed index.html
 var index []byte
+var m3u8String string
 
 type UDPAddressInfo struct {
 	Address    string
@@ -32,9 +33,18 @@ type UDPAddressInfo struct {
 	Bandwidth  string
 }
 
-// handleIndex wraps an HTTP handler and serves the home page
-func handleIndex(wrapped http.HandlerFunc) http.HandlerFunc {
+func handleM3u8Urls(muxMap map[string]*gohlslib.Muxer) http.HandlerFunc {
+	// muxMap will have muxer for each resolution.
+	// When url contains a resolution name then we will use that specific muxer from muxMap to handle that url.
+
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/video.m3u8" {
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(m3u8String))
+			return
+		}
+
 		if r.URL.Path == "/" {
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusOK)
@@ -42,7 +52,14 @@ func handleIndex(wrapped http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		wrapped(w, r)
+		for resolution, mux := range muxMap {
+			if strings.Contains(r.URL.Path, resolution) {
+				mux.Handle(w, r)
+				return
+			}
+		}
+
+		http.NotFound(w, r)
 	}
 }
 
@@ -53,7 +70,7 @@ func main() {
 
 	flag.Parse()
 	header := "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-INDEPENDENT-SEGMENTS\n\n"
-	m3u8String := ""
+	m3u8String = ""
 
 	// create the HLS muxer
 	mux := &gohlslib.Muxer{
@@ -80,7 +97,9 @@ func main() {
 
 	udpInfo := parseUDPAddresses(*udpAddresses)
 
-	for _, info := range udpInfo {
+	muxMap := make(map[string]*gohlslib.Muxer)
+
+	for index, info := range udpInfo {
 		fmt.Printf("Address: %s, Name: %s, Resolution: %s, Bandwidth: %s\n", info.Address, info.Name, info.Resolution, info.Bandwidth)
 		m3u8String += GenerateM3U8String(info.Bandwidth, info.Resolution)
 
@@ -92,20 +111,22 @@ func main() {
 
 		log.Println("Starting for ", info.Name, info.Address)
 		wg.Add(1)
-
-		go func(pc net.PacketConn, resolution string) {
+		mux := createMuxer(*directory, info.Name)
+		muxMap[info.Name] = mux
+		go func(pc net.PacketConn, resolution string, mux *gohlslib.Muxer, index int) {
 			defer wg.Done()
-			setupMPEGTSReader(pc, resolution, *directory)
-		}(pc, info.Name)
+			setupMPEGTSReader(pc, resolution, *directory, mux, index)
+		}(pc, info.Name, mux, index)
 	}
 
-	m3u8String += GenerateM3U8String("1000000", "1280x720")
-	mux.GenerateMainManifest(header + m3u8String)
+	startServer(muxMap)
+	m3u8String = header + m3u8String
+	mux.GenerateMainManifest(m3u8String)
 	wg.Wait()
 }
 
-func setupMPEGTSReader(pc net.PacketConn, resolution string, directory string) {
-	mux := &gohlslib.Muxer{
+func createMuxer(directory string, prefix string) *gohlslib.Muxer {
+	return &gohlslib.Muxer{
 		VideoTrack: &gohlslib.Track{
 			Codec: &codecs.H264{},
 		},
@@ -120,10 +141,14 @@ func setupMPEGTSReader(pc net.PacketConn, resolution string, directory string) {
 		},
 		Directory:    directory,
 		SegmentCount: 999999,
-		Prefix:       resolution,
+		Prefix:       prefix,
 	}
+}
+
+func setupMPEGTSReader(pc net.PacketConn, resolution string, directory string, mux *gohlslib.Muxer, index int) {
 	err := mux.Start()
 
+	fmt.Println("Mux map adding for ", resolution)
 	if err != nil {
 		panic(err)
 	}
@@ -150,7 +175,7 @@ func setupMPEGTSReader(pc net.PacketConn, resolution string, directory string) {
 				pts := timeDec.Decode(rawPTS)
 
 				// pass the access unit to the HLS muxer
-				log.Printf("visit http://localhost:8080 - encoding access unit with PTS = %v", pts)
+				// log.Printf("visit http://localhost:8080 - encoding access unit with PTS = %v", pts)
 				mux.WriteH26x(time.Now(), pts, au)
 
 				return nil
@@ -183,6 +208,15 @@ func setupMPEGTSReader(pc net.PacketConn, resolution string, directory string) {
 	}
 }
 
+func startServer(muxerMap map[string]*gohlslib.Muxer) {
+	s := &http.Server{
+		Addr:    ":8081",
+		Handler: handleM3u8Urls(muxerMap),
+	}
+	log.Println("HTTP server created on :8080")
+	go s.ListenAndServe()
+}
+
 func GenerateM3U8String(bandwidth string, resolution string) string {
 	var sb strings.Builder
 
@@ -194,7 +228,7 @@ func GenerateM3U8String(bandwidth string, resolution string) string {
 		resTag := resSplit[1]
 		sb.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%s,AVERAGE-BANDWIDTH=%s,CODECS=\"%s\",RESOLUTION=%s,FRAME-RATE=%s\n",
 			bandwidth, bandwidth, codecs, resolution, frameRate))
-		sb.WriteString(fmt.Sprintf("video_%sp.m3u8\n\n", resTag))
+		sb.WriteString(fmt.Sprintf("stream_%sp.m3u8\n\n", resTag))
 	}
 
 	return sb.String()
